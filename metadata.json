@@ -1,0 +1,6 @@
+{
+  "name": "Bardom APK Builder",
+  "description": "تطبيق متكامل لتشغيل بوت تليجرام وبناء ملفات الـ APK تلقائياً عبر سيرفرات GitHub Cloud مع محاكاة تفاعلية.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

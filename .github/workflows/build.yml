@@ -1,0 +1,113 @@
+name: Bardom Android APK Builder
+
+on:
+  push:
+    branches:
+      - build-run
+    paths:
+      - 'project.zip'
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Read Telegram Config
+        id: tg_config
+        run: |
+          if [ -f "tg_config.json" ]; then
+            CHAT_ID=$(jq -r '.chat_id' tg_config.json)
+            MESSAGE_ID=$(jq -r '.message_id' tg_config.json)
+            BOT_TOKEN=$(jq -r '.bot_token' tg_config.json)
+            echo "CHAT_ID=$CHAT_ID" >> $GITHUB_ENV
+            echo "MESSAGE_ID=$MESSAGE_ID" >> $GITHUB_ENV
+            echo "BOT_TOKEN=$BOT_TOKEN" >> $GITHUB_ENV
+            echo "::add-mask::$BOT_TOKEN"
+            echo "Found Telegram configuration. Chat ID: $CHAT_ID"
+          else
+            echo "❌ Error: tg_config.json not found!"
+            exit 1
+          fi
+
+      - name: Send Building Update to Telegram
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ env.BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ env.CHAT_ID }}" \
+            -d "reply_to_message_id=${{ env.MESSAGE_ID }}" \
+            -d "text=⚙️ بدأت الآن عملية إعداد وحل الاعتماديات لمشروع Gradle على خوادم GitHub Actions... يرجى الانتظار ⏳"
+
+      - name: Extract Project ZIP
+        run: |
+          mkdir -p android_project
+          unzip -o project.zip -d android_project
+          # نقل الملفات إلى المجلد الرئيسي إذا تم ضغط المجلد بالكامل بدلاً من المحتويات فقط
+          if [ -d "android_project/app" ] || [ -f "android_project/build.gradle" ] || [ -f "android_project/build.gradle.kts" ]; then
+            echo "ZIP contains files at the root of extraction."
+          else
+            # العثور على المجلد الفرعي الذي يحتوي على المشروع ونقله للجذر
+            SUBDIR=$(find android_project -maxdepth 1 -mindepth 1 -type d | head -n 1)
+            if [ -n "$SUBDIR" ]; then
+              echo "Moving files from subdirectory $SUBDIR to root workspace..."
+              mv $SUBDIR/* android_project/ 2>/dev/null || true
+              mv $SUBDIR/.* android_project/ 2>/dev/null || true
+            fi
+          fi
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Grant Execute Permissions to Gradle Wrapper
+        run: |
+          cd android_project
+          if [ -f "gradlew" ]; then
+            chmod +x gradlew
+          else
+            echo "⚠️ Warning: gradlew wrapper not found, initializing standard wrapper..."
+            gradle wrapper --gradle-version 8.0
+            chmod +x gradlew
+          fi
+
+      - name: Build Debug APK
+        id: build_apk
+        run: |
+          cd android_project
+          ./gradlew assembleDebug
+          
+          # البحث عن ملف الـ APK الناتج
+          APK_PATH=$(find app/build/outputs/apk/debug/ -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            APK_PATH=$(find . -name "*.apk" | head -n 1)
+          fi
+          
+          if [ -n "$APK_PATH" ]; then
+            echo "APK_PATH=android_project/$APK_PATH" >> $GITHUB_ENV
+            echo "✅ Successfully built APK: $APK_PATH"
+          else
+            echo "❌ Error: APK file was not found after gradle build!"
+            exit 1
+          fi
+
+      - name: Upload APK to Telegram Chat
+        if: success()
+        run: |
+          curl -v -F chat_id="${{ env.CHAT_ID }}" \
+            -F reply_to_message_id="${{ env.MESSAGE_ID }}" \
+            -F document=@"${{ env.APK_PATH }}" \
+            -F caption="🎉 تم بناء ملف الـ APK بنجاح وبشكل حقيقي! 🚀📱" \
+            "https://api.telegram.org/bot${{ env.BOT_TOKEN }}/sendDocument"
+
+      - name: Handle Failure & Send Log to Telegram
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ env.BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ env.CHAT_ID }}" \
+            -d "reply_to_message_id=${{ env.MESSAGE_ID }}" \
+            -d "text=❌ للأسف فشلت عملية البناء وتجميع الـ APK. يرجى التحقق من صحة ملفات مشروع الأندرويد وخلوها من الأخطاء البرمجية المتسببة في فشل Gradle build."
